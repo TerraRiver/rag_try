@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \":*)",
+      "Bash(python -c \"import sys; print\\(sys.stdin.read\\(\\)\\)\")",
+      "Bash(del:*)",
+      "Bash(uv --version)",
+      "Bash(uv sync:*)",
+      "Bash(uv add:*)"
+    ]
+  }
+}

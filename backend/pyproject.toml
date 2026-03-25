@@ -1,0 +1,22 @@
+[project]
+name = "rag-backend"
+version = "0.1.0"
+description = "领导人讲话 RAG 问答后端"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "python-dotenv>=1.0",
+    "langchain>=0.2",
+    "langchain-openai>=0.1",
+    "langchain-community>=0.2",
+    "chromadb>=0.5",
+    "pypdf>=4.0",
+    "tiktoken>=0.7",
+    "pandas>=2.0",
+    "langchain-chroma>=1.1.0",
+]
+
+[tool.uv]
+# 固定 Python 版本（可选）
+# python = "3.12"
