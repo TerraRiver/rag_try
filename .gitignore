@@ -26,6 +26,7 @@ env/
 # ==============================
 backend/chroma_db/
 chroma_db/
+backend/docs/contentALL1-12298.csv
 
 # ==============================
 # 前端
