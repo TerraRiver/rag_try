@@ -6,7 +6,24 @@
       "Bash(del:*)",
       "Bash(uv --version)",
       "Bash(uv sync:*)",
-      "Bash(uv add:*)"
+      "Bash(uv add:*)",
+      "Bash(.venv/Scripts/python -c \"import langchain; print\\(langchain.__version__\\)\")",
+      "Bash(.venv/Scripts/python -c \"import langchain_community; print\\(langchain_community.__version__\\)\")",
+      "Bash(.venv/Scripts/python -c \"import pydantic; print\\(pydantic.__version__\\)\")",
+      "Bash(.venv/Scripts/pip install:*)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -m pip install rank-bm25 jieba)",
+      "Bash(python3 -m pip install --target /d/Projects/rag_try/backend/.venv/Lib/site-packages rank-bm25 jieba)",
+      "Bash(where uv:*)",
+      "Bash(where pip:*)",
+      "Bash(where python:*)",
+      "Bash(uv pip:*)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -c \":*)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -c \"\nimport pkgutil, langchain_community.retrievers as pkg\nprint\\([m.name for m in pkgutil.iter_modules\\(pkg.__path__\\)]\\)\n\" 2>&1)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -c \"\nimport pkgutil, langchain_core as pkg\nprint\\([m.name for m in pkgutil.iter_modules\\(pkg.__path__\\)]\\)\n\" 2>&1)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -c \"\nimport langchain_community\nimport pkgutil\nfor m in pkgutil.walk_packages\\(langchain_community.__path__, prefix='langchain_community.'\\):\n    if 'ensemble' in m.name or 'compression' in m.name:\n        print\\(m.name\\)\n\" 2>&1)",
+      "Bash(grep -rl EnsembleRetriever /d/Projects/rag_try/backend/.venv/Lib/site-packages/ --include=*.py -l)",
+      "Bash(grep -rl ContextualCompressionRetriever /d/Projects/rag_try/backend/.venv/Lib/site-packages/ --include=*.py -l)",
+      "Bash(/d/Projects/rag_try/backend/.venv/Scripts/python.exe -c \"\nfrom langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever\nfrom langchain_core.documents.compressor import BaseDocumentCompressor\nfrom langchain_community.retrievers import BM25Retriever\nprint\\('All imports OK'\\)\n\" 2>&1)"
     ]
   }
 }

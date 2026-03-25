@@ -35,7 +35,7 @@ export default function MessageBubble({ message }) {
 
         {/* 参考来源（折叠展示） */}
         {!isUser && message.sources && message.sources.length > 0 && (
-          <details className="text-xs text-gray-400 w-full">
+          <details open className="text-xs text-gray-400 w-full">
             <summary className="cursor-pointer hover:text-gray-500 select-none py-0.5">
               参考来源 ({message.sources.length} 条)
             </summary>

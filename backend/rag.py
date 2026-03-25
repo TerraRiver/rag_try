@@ -7,12 +7,20 @@ rag.py — RAG 核心逻辑
 """
 
 import os
+from typing import Optional, Sequence
+
+import httpx
+import jieba
 from dotenv import load_dotenv
+from langchain_community.retrievers import BM25Retriever
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings
 from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.runnables import RunnablePassthrough
+from langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever
+from langchain_core.documents.compressor import BaseDocumentCompressor
 
 load_dotenv()
 
@@ -27,7 +35,7 @@ _llm = ChatOpenAI(
 )
 
 _embeddings = OpenAIEmbeddings(
-    model=os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3"),
+    model=os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B"),
     api_key=os.getenv("SILICONFLOW_API_KEY"),
     base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
 )
@@ -39,15 +47,110 @@ _vectorstore = None
 _retriever = None
 
 
+# ──────────────────────────────────────────────
+# 中文分词（BM25 用）
+# ──────────────────────────────────────────────
+def _jieba_tokenize(text: str) -> list[str]:
+    return list(jieba.cut_for_search(text))
+
+
+# ──────────────────────────────────────────────
+# SiliconFlow Reranker（调用远程 /rerank 接口）
+# ──────────────────────────────────────────────
+class SiliconFlowReranker(BaseDocumentCompressor):
+    """用硅基流动的 rerank API 对候选文档重新排序。"""
+    model: str
+    api_key: str
+    base_url: str
+    top_n: int = 8
+
+    def compress_documents(
+        self,
+        documents: Sequence[Document],
+        query: str,
+        callbacks=None,
+    ) -> Sequence[Document]:
+        if not documents:
+            return []
+        url = self.base_url.rstrip("/") + "/rerank"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        payload = {
+            "model": self.model,
+            "query": query,
+            "documents": [doc.page_content for doc in documents],
+            "top_n": self.top_n,
+        }
+        try:
+            resp = httpx.post(url, json=payload, headers=headers, timeout=30)
+            resp.raise_for_status()
+            results = resp.json()["results"]
+            return [documents[r["index"]] for r in results]
+        except Exception as e:
+            print(f"⚠️  Reranker 调用失败，降级为原顺序：{e}")
+            return list(documents)[: self.top_n]
+
+
 def load_vectorstore():
-    """加载本地 ChromaDB，在 FastAPI lifespan 中调用。"""
+    """加载本地 ChromaDB，构建混合检索器（BM25 + 向量 + Reranker），在 FastAPI lifespan 中调用。"""
     global _vectorstore, _retriever
     chroma_path = os.getenv("CHROMA_DB_PATH", "./chroma_db")
     _vectorstore = Chroma(
         persist_directory=chroma_path,
         embedding_function=_embeddings,
     )
-    _retriever = _vectorstore.as_retriever(search_kwargs={"k": 3})
+
+    # ── 1. 从 Chroma 分批取全量文档，构建 BM25 索引 ──────────────
+    # SQLite 的 SQL 变量数有上限，需要分批 get() 避免 "too many SQL variables"
+    FETCH_BATCH = 2000
+    all_docs: list[Document] = []
+    offset = 0
+    while True:
+        raw = _vectorstore.get(
+            include=["documents", "metadatas"],
+            limit=FETCH_BATCH,
+            offset=offset,
+        )
+        batch_texts = raw.get("documents") or []
+        batch_metas = raw.get("metadatas") or []
+        if not batch_texts:
+            break
+        for text, meta in zip(batch_texts, batch_metas):
+            if text:
+                all_docs.append(Document(page_content=text, metadata=meta))
+        offset += len(batch_texts)
+        if len(batch_texts) < FETCH_BATCH:
+            break
+    print(f"  BM25 索引：共 {len(all_docs)} 个文档")
+
+    bm25_retriever = BM25Retriever.from_documents(
+        all_docs, preprocess_func=_jieba_tokenize, k=15
+    )
+
+    # ── 2. 向量检索器 ──────────────────────────────────────────────
+    dense_retriever = _vectorstore.as_retriever(search_kwargs={"k": 15})
+
+    # ── 3. 混合检索（RRF 融合） ────────────────────────────────────
+    # weights: [BM25, dense]，偏向语义检索
+    ensemble = EnsembleRetriever(
+        retrievers=[bm25_retriever, dense_retriever],
+        weights=[0.4, 0.6],
+    )
+
+    # ── 4. Reranker 精排 ───────────────────────────────────────────
+    reranker = SiliconFlowReranker(
+        model=os.getenv("RERANKER_MODEL", "Qwen/Qwen3-Reranker-8B"),
+        api_key=os.getenv("SILICONFLOW_API_KEY", ""),
+        base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
+        top_n=int(os.getenv("RERANKER_TOP_N", "10")),
+    )
+
+    _retriever = ContextualCompressionRetriever(
+        base_compressor=reranker,
+        base_retriever=ensemble,
+    )
 
 
 # ──────────────────────────────────────────────
@@ -75,10 +178,7 @@ def _format_docs(docs) -> str:
             f"[资料{i}] 《{meta.get('标题', '未知')}》"
             f"（{meta.get('来源', '')} · {meta.get('时间', '')}）"
         )
-        # page_content 已含 header，直接截取正文部分（去掉注入的那段 header）
-        content_lines = doc.page_content.split("\n\n", 1)
-        body = content_lines[1] if len(content_lines) > 1 else doc.page_content
-        parts.append(f"{header}\n{body}")
+        parts.append(f"{header}\n{doc.page_content}")
     return "\n\n".join(parts)
 
 
@@ -102,10 +202,7 @@ def _format_source_node(doc) -> str:
     chunk_idx   = meta.get("chunk_index", 0)
     chunk_total = meta.get("chunk_total", 1)
 
-    # 取正文摘要（去掉 header 行）
-    content_parts = doc.page_content.split("\n\n", 1)
-    body = content_parts[1] if len(content_parts) > 1 else doc.page_content
-    snippet = body[:150] + "…" if len(body) > 150 else body
+    snippet = doc.page_content[:150] + "…" if len(doc.page_content) > 150 else doc.page_content
 
     chunk_info = f"（第 {chunk_idx+1}/{chunk_total} 段）" if chunk_total > 1 else ""
     source_line = f"📰 {source} · {date}" if source else date
@@ -117,6 +214,32 @@ def _format_source_node(doc) -> str:
 # ──────────────────────────────────────────────
 # 对外接口
 # ──────────────────────────────────────────────
+_REWRITE_TEMPLATE = """\
+请根据以下对话历史，将用户的最新问题改写为一个完整、独立的搜索句子。
+要求：不依赖任何代词或上下文指代，直接表达完整语义，不输出任何解释。
+
+对话历史：
+{history}
+
+最新问题：{question}
+
+改写后的完整问题："""
+
+_rewrite_prompt = ChatPromptTemplate.from_template(_REWRITE_TEMPLATE)
+
+
+def _rewrite_query(question: str, history: list) -> str:
+    """多轮对话时，用 LLM 将含代词/指代的问题扩写为独立检索句。"""
+    if not history:
+        return question
+    history_text = _format_history(history)
+    chain = _rewrite_prompt | _llm | StrOutputParser()
+    try:
+        return chain.invoke({"history": history_text, "question": question}).strip()
+    except Exception:
+        return question  # 降级：出错时直接用原问题
+
+
 def query_rag(question: str, history: list = None) -> dict:
     """
     执行 RAG 查询。
@@ -127,8 +250,11 @@ def query_rag(question: str, history: list = None) -> dict:
             "向量库未加载。请先运行 ingest.py 建立知识库，然后重启后端。"
         )
 
+    # 多轮对话时重写问题，消除代词/指代歧义
+    search_query = _rewrite_query(question, history or [])
+
     # 检索相关 chunks
-    docs = _retriever.invoke(question)
+    docs = _retriever.invoke(search_query)
 
     # 构建生成链
     chain = (

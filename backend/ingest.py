@@ -10,8 +10,9 @@ ingest.py — 针对领导人讲话 CSV 的知识库初始化脚本
 
 策略：
   - 短讲话（内容 ≤ CHUNK_SIZE 字符）→ 整条作为一个 chunk
-  - 长讲话 → 按中文自然句边界分块，每块头部注入【标题】【时间】【来源】
-  - 元数据（标题/时间/来源/链接）随每个 chunk 存入 ChromaDB，方便检索时展示来源
+  - 长讲话 → 按中文自然句边界分块
+  - page_content 只存纯正文，不含 header（避免相同 header 在向量空间中聚集干扰语义）
+  - 元数据（标题/时间/来源/链接）随每个 chunk 存入 ChromaDB，检索时动态拼入 Prompt
   - 分批写入，避免内存/API 请求过大
 """
 
@@ -59,8 +60,8 @@ def load_csv(csv_path: str) -> pd.DataFrame:
 def build_documents(df: pd.DataFrame) -> list[Document]:
     """
     每行讲话 → 若干 LangChain Document。
-    每个 Document 的 page_content = header + 正文片段，
-    metadata 保存结构化字段供检索结果展示。
+    每个 Document 的 page_content = 纯正文（不含 header），
+    metadata 保存结构化字段供检索结果展示及 Prompt 拼接。
     """
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
@@ -88,9 +89,6 @@ def build_documents(df: pd.DataFrame) -> list[Document]:
             skipped += 1
             continue
 
-        # 每个 chunk 都带上 header，让 embedding 携带语义锚点
-        header = f"【标题】{title}\n【时间】{date}\n【来源】{source}\n\n"
-
         meta = {
             "原序号": seq_no,
             "标题":   title,
@@ -100,17 +98,17 @@ def build_documents(df: pd.DataFrame) -> list[Document]:
         }
 
         if len(content) <= CHUNK_SIZE:
-            # 短讲话：整条不拆
+            # 短讲话：整条不拆，page_content 只存纯正文
             documents.append(Document(
-                page_content=header + content,
+                page_content=content,
                 metadata={**meta, "chunk_index": 0, "chunk_total": 1},
             ))
         else:
-            # 长讲话：按句子边界分块
+            # 长讲话：按句子边界分块，page_content 只存纯正文
             chunks = splitter.split_text(content)
             for i, chunk in enumerate(chunks):
                 documents.append(Document(
-                    page_content=header + chunk,
+                    page_content=chunk,
                     metadata={**meta, "chunk_index": i, "chunk_total": len(chunks)},
                 ))
 
@@ -169,7 +167,7 @@ def main():
 
     # Step 3: 向量化 + 写入
     print(f"\n🔢 向量化写入 ChromaDB（{CHROMA_DB_PATH}）...")
-    model_name = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+    model_name = os.getenv("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B")
     print(f"  Embedding 模型：{model_name}")
     print(f"  批次大小：{BATCH_SIZE}  （共 {-(-len(documents)//BATCH_SIZE)} 批）\n")
 
