@@ -7,7 +7,7 @@ rag.py — RAG 核心逻辑
 """
 
 import os
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 import httpx
 import jieba
@@ -45,6 +45,7 @@ _embeddings = OpenAIEmbeddings(
 # ──────────────────────────────────────────────
 _vectorstore = None
 _retriever = None
+ProgressCallback = Optional[Callable[[str, str], None]]
 
 
 # ──────────────────────────────────────────────
@@ -240,7 +241,11 @@ def _rewrite_query(question: str, history: list) -> str:
         return question  # 降级：出错时直接用原问题
 
 
-def query_rag(question: str, history: list = None) -> dict:
+def query_rag(
+    question: str,
+    history: list = None,
+    progress_callback: ProgressCallback = None,
+) -> dict:
     """
     执行 RAG 查询。
     返回 {"answer": str, "source_nodes": list[str]}
@@ -250,13 +255,17 @@ def query_rag(question: str, history: list = None) -> dict:
             "向量库未加载。请先运行 ingest.py 建立知识库，然后重启后端。"
         )
 
-    # 多轮对话时重写问题，消除代词/指代歧义
+    def report(stage: str, label: str) -> None:
+        if progress_callback:
+            progress_callback(stage, label)
+
+    report("rewrite", "理解问题")
     search_query = _rewrite_query(question, history or [])
 
-    # 检索相关 chunks
+    report("retrieve", "检索资料")
     docs = _retriever.invoke(search_query)
 
-    # 构建生成链
+    report("generate", "生成答案")
     chain = (
         {
             "context":      lambda _: _format_docs(docs),
@@ -270,7 +279,7 @@ def query_rag(question: str, history: list = None) -> dict:
 
     answer = chain.invoke(question)
 
-    # 格式化来源信息
+    report("sources", "整理来源")
     source_nodes = [_format_source_node(doc) for doc in docs]
 
     return {"answer": answer, "source_nodes": source_nodes}
