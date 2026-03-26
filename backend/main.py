@@ -50,6 +50,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
+
+if DIST_DIR.exists():
+    app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        return FileResponse(DIST_DIR / "index.html")
+else:
+    print(f"frontend dist not found: {DIST_DIR}")
+
+
 
 class ChatRequest(BaseModel):
     query: str
