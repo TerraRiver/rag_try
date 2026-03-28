@@ -11,7 +11,8 @@ from typing import Callable, Optional, Sequence
 
 import httpx
 import jieba
-from dotenv import load_dotenv
+from debug_logger import debug_log
+from env_loader import load_project_env
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
@@ -22,7 +23,11 @@ from langchain_chroma import Chroma
 from langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever
 from langchain_core.documents.compressor import BaseDocumentCompressor
 
-load_dotenv()
+load_project_env()
+
+
+def _debug_log(message: str) -> None:
+    debug_log("rag", message)
 
 # ──────────────────────────────────────────────
 # 模型初始化
@@ -51,6 +56,7 @@ TokenCallback = Optional[Callable[[str], None]]
 MAX_HISTORY_MESSAGES = 4
 MAX_HISTORY_CHARS_PER_MESSAGE = 400
 MAX_SEARCH_QUERY_CHARS = 200
+MAX_SESSION_SUMMARY_CHARS = 500
 
 
 # ──────────────────────────────────────────────
@@ -166,18 +172,23 @@ def load_vectorstore():
 # ──────────────────────────────────────────────
 # Prompt 模板
 # ──────────────────────────────────────────────
-_PROMPT_TEMPLATE = """\
+_SYSTEM_PROMPT = """\
 你是一个专业的领导人讲话研究助手。请依据「已知资料」回答用户问题。
 
 回答规则（必须严格遵守）：
 1. 事实依据只能来自已知资料，禁止使用外部常识或编造信息。
-2. 对话历史仅用于理解用户本轮提问中的代词和省略指代，不得作为事实证据。
+2. 会话摘要和最近几轮对话仅用于理解用户本轮提问中的代词和省略指代，不得作为事实证据。
 3. 每一个自然段末尾都必须追加引用标注，格式为 [资料n]，可多个并列，如 [资料1][资料3]。
 4. 引用编号 n 必须来自下方已知资料中的编号，且与该段内容对应。
 5. 若资料不足以回答，直接回答“未在资料中找到明确依据。”并给出最相关的 [资料n]。
+"""
 
-对话历史（仅用于指代理解）：
-{history_text}
+_PROMPT_TEMPLATE = """\
+会话摘要（仅用于理解延续话题）：
+{session_summary}
+
+最近几轮对话（仅用于理解指代）：
+{recent_messages}
 
 已知资料：
 {context}
@@ -185,7 +196,12 @@ _PROMPT_TEMPLATE = """\
 用户问题：{question}
 """
 
-_prompt = ChatPromptTemplate.from_template(_PROMPT_TEMPLATE)
+_prompt = ChatPromptTemplate.from_messages(
+    [
+        ("system", _SYSTEM_PROMPT),
+        ("human", _PROMPT_TEMPLATE),
+    ]
+)
 
 
 def _format_docs(docs) -> str:
@@ -200,17 +216,29 @@ def _format_docs(docs) -> str:
     return "\n\n".join(parts)
 
 
-def _format_history(history: list) -> str:
-    if not history:
-        return ""
+def _format_recent_messages(messages: list) -> str:
+    if not messages:
+        return "（无）"
     lines = []
-    for msg in history[-MAX_HISTORY_MESSAGES:]:
+    for msg in messages[-MAX_HISTORY_MESSAGES:]:
         role = "用户" if msg.get("role") == "user" else "助手"
         content = " ".join(str(msg.get("content", "")).split())
         if len(content) > MAX_HISTORY_CHARS_PER_MESSAGE:
             content = content[:MAX_HISTORY_CHARS_PER_MESSAGE] + "…"
         lines.append(f"{role}：{content}")
-    return "\n对话历史：\n" + "\n".join(lines) + "\n"
+    return "\n".join(lines) if lines else "（无）"
+
+
+def _format_session_summary(summary: str) -> str:
+    text = _normalize_session_summary(summary)
+    return text if text else "（无）"
+
+
+def _normalize_session_summary(summary: str) -> str:
+    text = " ".join((summary or "").split())
+    if len(text) > MAX_SESSION_SUMMARY_CHARS:
+        text = text[:MAX_SESSION_SUMMARY_CHARS].rstrip() + "…"
+    return text
 
 
 def _normalize_search_query(text: str, fallback: str) -> str:
@@ -220,6 +248,13 @@ def _normalize_search_query(text: str, fallback: str) -> str:
     if len(query) > MAX_SEARCH_QUERY_CHARS:
         query = query[:MAX_SEARCH_QUERY_CHARS].rstrip() + "…"
     return query or fallback.strip()
+
+
+def _preview_text(text: str, limit: int = 160) -> str:
+    normalized = " ".join((text or "").split())
+    if len(normalized) > limit:
+        return normalized[:limit].rstrip() + "…"
+    return normalized
 
 
 def _format_source_node(doc) -> str:
@@ -248,8 +283,11 @@ _REWRITE_TEMPLATE = """\
 请根据以下对话历史，将用户的最新问题改写为一个完整、独立的搜索句子。
 要求：不依赖任何代词或上下文指代，直接表达完整语义，不输出任何解释。
 
-对话历史：
-{history}
+会话摘要：
+{session_summary}
+
+最近几轮对话：
+{recent_messages}
 
 最新问题：{question}
 
@@ -258,17 +296,34 @@ _REWRITE_TEMPLATE = """\
 _rewrite_prompt = ChatPromptTemplate.from_template(_REWRITE_TEMPLATE)
 
 
-def _rewrite_query(question: str, history: list) -> str:
+def _rewrite_query(question: str, session_summary: str, recent_messages: list) -> str:
     """多轮对话时，用 LLM 将含代词/指代的问题扩写为独立检索句。"""
-    if not history:
-        return question
-    history_text = _format_history(history)
+    if not session_summary and not recent_messages:
+        return _normalize_search_query(question, question)
     chain = _rewrite_prompt | _llm | StrOutputParser()
     try:
-        rewritten = chain.invoke({"history": history_text, "question": question}).strip()
-        return _normalize_search_query(rewritten, question)
+        rewritten = chain.invoke(
+            {
+                "session_summary": _format_session_summary(session_summary),
+                "recent_messages": _format_recent_messages(recent_messages),
+                "question": question,
+            }
+        ).strip()
+        normalized = _normalize_search_query(rewritten, question)
+        _debug_log(
+            "rewrite "
+            f"summary='{_preview_text(session_summary)}' "
+            f"recent='{_preview_text(_format_recent_messages(recent_messages))}' "
+            f"question='{_preview_text(question)}' "
+            f"query='{_preview_text(normalized)}'"
+        )
+        return normalized
     except Exception:
-        return _normalize_search_query(question, question)
+        normalized = _normalize_search_query(question, question)
+        _debug_log(
+            f"rewrite fallback question='{_preview_text(question)}' query='{_preview_text(normalized)}'"
+        )
+        return normalized
 
 
 def _retrieve_documents(
@@ -282,15 +337,25 @@ def _retrieve_documents(
 
     report("retrieve", "召回候选资料")
     candidates = _candidate_retriever.invoke(search_query)
+    _debug_log(
+        f"retrieve candidates={len(candidates)} query='{_preview_text(search_query)}'"
+    )
 
     report("retrieve", "精排检索结果")
     reranked = _reranker.compress_documents(candidates, search_query)
-    return list(reranked)
+    reranked_list = list(reranked)
+    _debug_log(
+        "rerank "
+        f"results={len(reranked_list)} "
+        f"top_titles={[doc.metadata.get('标题', '未知') for doc in reranked_list[:3]]}"
+    )
+    return reranked_list
 
 
 def query_rag(
     question: str,
-    history: list = None,
+    session_summary: str = "",
+    recent_messages: list | None = None,
     progress_callback: ProgressCallback = None,
 ) -> dict:
     """
@@ -308,7 +373,13 @@ def query_rag(
 
     report("rewrite", "理解问题")
     clean_question = question.strip()
-    search_query = _rewrite_query(clean_question, history or [])
+    _debug_log(
+        "query_rag "
+        f"question='{_preview_text(clean_question)}' "
+        f"summary='{_preview_text(session_summary)}' "
+        f"recent_count={len(recent_messages or [])}"
+    )
+    search_query = _rewrite_query(clean_question, session_summary, recent_messages or [])
 
     docs = _retrieve_documents(search_query, report)
 
@@ -316,7 +387,8 @@ def query_rag(
     chain = (
         {
             "context":      lambda _: _format_docs(docs),
-            "history_text": lambda _: _format_history(history or []),
+            "session_summary": lambda _: _format_session_summary(session_summary),
+            "recent_messages": lambda _: _format_recent_messages(recent_messages or []),
             "question":     RunnablePassthrough(),
         }
         | _prompt
@@ -351,7 +423,8 @@ def _extract_chunk_text(chunk) -> str:
 
 def query_rag_stream(
     question: str,
-    history: list = None,
+    session_summary: str = "",
+    recent_messages: list | None = None,
     progress_callback: ProgressCallback = None,
     token_callback: TokenCallback = None,
 ) -> dict:
@@ -370,13 +443,20 @@ def query_rag_stream(
 
     report("rewrite", "理解问题")
     clean_question = question.strip()
-    search_query = _rewrite_query(clean_question, history or [])
+    _debug_log(
+        "query_rag_stream "
+        f"question='{_preview_text(clean_question)}' "
+        f"summary='{_preview_text(session_summary)}' "
+        f"recent_count={len(recent_messages or [])}"
+    )
+    search_query = _rewrite_query(clean_question, session_summary, recent_messages or [])
 
     docs = _retrieve_documents(search_query, report)
 
     prompt_value = _prompt.invoke(
         {
-            "history_text": _format_history(history or []),
+            "session_summary": _format_session_summary(session_summary),
+            "recent_messages": _format_recent_messages(recent_messages or []),
             "context": _format_docs(docs),
             "question": clean_question,
         }
@@ -397,3 +477,48 @@ def query_rag_stream(
     report("sources", "整理来源")
     source_nodes = [_format_source_node(doc) for doc in docs]
     return {"answer": answer, "source_nodes": source_nodes}
+
+
+_SUMMARY_TEMPLATE = """\
+你在维护一个 RAG 会话摘要。请基于已有摘要和最新对话，输出新的会话摘要。
+
+要求：
+1. 只保留后续检索和回答真正需要的上下文。
+2. 重点记录持续讨论的主题、明确限定条件、已确认的结论、仍未解决的问题。
+3. 不要逐轮复述，不要编造，不要使用项目符号。
+4. 输出控制在 200 字以内，只输出摘要正文。
+
+已有摘要：
+{previous_summary}
+
+最新对话：
+{recent_messages}
+
+新的会话摘要："""
+
+_summary_prompt = ChatPromptTemplate.from_template(_SUMMARY_TEMPLATE)
+
+
+def refresh_session_summary(previous_summary: str, recent_messages: list | None) -> str:
+    chain = _summary_prompt | _llm | StrOutputParser()
+    try:
+        summary = chain.invoke(
+            {
+                "previous_summary": _format_session_summary(previous_summary),
+                "recent_messages": _format_recent_messages(recent_messages or []),
+            }
+        ).strip()
+        normalized = _normalize_session_summary(summary)
+        _debug_log(
+            "summary refresh "
+            f"previous='{_preview_text(previous_summary)}' "
+            f"recent='{_preview_text(_format_recent_messages(recent_messages or []))}' "
+            f"next='{_preview_text(normalized)}'"
+        )
+        return normalized
+    except Exception:
+        normalized = _normalize_session_summary(previous_summary)
+        _debug_log(
+            f"summary refresh fallback previous='{_preview_text(normalized)}'"
+        )
+        return normalized

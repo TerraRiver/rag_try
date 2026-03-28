@@ -26,6 +26,9 @@ env/
 # ==============================
 backend/chroma_db/
 chroma_db/
+backend/session_state.db
+backend/session_state.db-shm
+backend/session_state.db-wal
 backend/docs/contentALL1-12298.csv
 
 # ==============================

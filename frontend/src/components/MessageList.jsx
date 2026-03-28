@@ -1,7 +1,13 @@
 import { useEffect, useRef } from 'react'
 import MessageBubble from './MessageBubble'
 
-export default function MessageList({ messages, isLoading, onSend, starterPrompts = [] }) {
+export default function MessageList({
+  messages,
+  isLoading,
+  isRestoring = false,
+  onSend,
+  starterPrompts = [],
+}) {
   const bottomRef = useRef(null)
 
   useEffect(() => {
@@ -15,7 +21,7 @@ export default function MessageList({ messages, isLoading, onSend, starterPrompt
 
   return (
     <div className="chat-scrollbar flex-1 min-h-0 overflow-y-auto px-4 py-6 md:px-8">
-      {messages.length === 0 && !isLoading && (
+      {messages.length === 0 && !isLoading && !isRestoring && (
         <div className="mx-auto flex h-full w-full max-w-4xl items-center">
           <div className="w-full rounded-[28px] border border-[color:var(--line)] bg-[color:var(--surface)] p-6 shadow-[0_12px_36px_rgba(15,23,42,0.05)] md:p-8">
             <p className="section-label">开始提问</p>

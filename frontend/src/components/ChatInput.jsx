@@ -1,11 +1,12 @@
 import { useState, useRef } from 'react'
 
-export default function ChatInput({ onSend, isLoading }) {
+export default function ChatInput({ onSend, isLoading, isRestoring = false }) {
   const [value, setValue] = useState('')
   const textareaRef = useRef(null)
+  const isBusy = isLoading || isRestoring
 
   const handleSend = () => {
-    if (!value.trim() || isLoading) return
+    if (!value.trim() || isBusy) return
     onSend(value.trim())
     setValue('')
     if (textareaRef.current) {
@@ -39,7 +40,7 @@ export default function ChatInput({ onSend, isLoading }) {
               <div className="mb-2 flex items-center justify-between gap-3 px-1">
                 <span className="section-label">输入问题</span>
                 <span className="text-[11px] uppercase tracking-[0.26em] text-[color:var(--muted)]">
-                  {isLoading ? 'Generating' : 'Ready'}
+                  {isLoading ? 'Generating' : isRestoring ? 'Restoring' : 'Ready'}
                 </span>
               </div>
               <textarea
@@ -47,8 +48,8 @@ export default function ChatInput({ onSend, isLoading }) {
                 value={value}
                 onChange={handleInput}
                 onKeyDown={handleKeyDown}
-                placeholder="输入你的问题"
-                disabled={isLoading}
+                placeholder={isRestoring ? '正在恢复历史会话…' : '输入你的问题'}
+                disabled={isBusy}
                 rows={1}
                 className="w-full resize-none rounded-[18px] border border-[color:var(--line)] bg-white px-4 py-3 text-[15px] leading-7 text-[color:var(--ink)] outline-none transition placeholder:text-[color:var(--muted)] focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-soft)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-soft)]"
                 style={{ minHeight: '96px', maxHeight: '180px' }}
@@ -57,10 +58,10 @@ export default function ChatInput({ onSend, isLoading }) {
 
             <button
               onClick={handleSend}
-              disabled={!value.trim() || isLoading}
+              disabled={!value.trim() || isBusy}
               className="flex h-12 min-w-[124px] items-center justify-center rounded-[16px] border border-[color:var(--accent)] bg-[color:var(--accent)] px-5 text-sm font-semibold text-white transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:border-[color:var(--line)] disabled:bg-[color:var(--surface-soft)] disabled:text-[color:var(--muted)]"
             >
-              {isLoading ? '处理中...' : '发送问题'}
+              {isLoading ? '处理中...' : isRestoring ? '恢复中...' : '发送问题'}
             </button>
           </div>
         </div>

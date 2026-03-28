@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import ChatContainer from './components/ChatContainer'
 
 const STAGE_ORDER = [
@@ -9,10 +9,85 @@ const STAGE_ORDER = [
   { key: 'sources', label: '整理来源' },
 ]
 
+const SESSION_STORAGE_KEY = 'rag_try_session_id'
+const SESSION_RESTORE_LIMIT = 40
+
+function createSessionId() {
+  if (typeof window === 'undefined') {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  }
+
+  return window.crypto?.randomUUID?.()
+    || `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+function getOrCreateSessionId() {
+  if (typeof window === 'undefined') {
+    return `session-${Date.now()}`
+  }
+
+  try {
+    const saved = window.localStorage.getItem(SESSION_STORAGE_KEY)
+    if (saved) return saved
+
+    const nextId = createSessionId()
+    window.localStorage.setItem(SESSION_STORAGE_KEY, nextId)
+    return nextId
+  } catch (_) {
+    return `session-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  }
+}
+
 function App() {
+  const [sessionId, setSessionId] = useState(getOrCreateSessionId)
   const [messages, setMessages] = useState([])
   const [isLoading, setIsLoading] = useState(false)
+  const [isRestoring, setIsRestoring] = useState(false)
   const [loadingMeta, setLoadingMeta] = useState(null)
+
+  useEffect(() => {
+    const controller = new AbortController()
+
+    const restoreSession = async () => {
+      setIsRestoring(true)
+
+      try {
+        const params = new URLSearchParams({ limit: String(SESSION_RESTORE_LIMIT) })
+        const response = await fetch(
+          `/api/sessions/${encodeURIComponent(sessionId)}?${params.toString()}`,
+          { signal: controller.signal }
+        )
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        const payload = await response.json()
+        if (controller.signal.aborted) return
+
+        setMessages(
+          (payload.messages || []).map((message) => ({
+            id: message.id,
+            role: message.role,
+            content: message.content,
+            sources: message.source_nodes || [],
+            isStreaming: false,
+          }))
+        )
+      } catch (error) {
+        if (controller.signal.aborted) return
+        setMessages([])
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsRestoring(false)
+        }
+      }
+    }
+
+    restoreSession()
+
+    return () => controller.abort()
+  }, [sessionId])
 
   const updateAssistantMessage = (assistantId, updater, fallbackMessage = null) => {
     setMessages((prev) =>
@@ -32,11 +107,10 @@ function App() {
   }
 
   const sendMessage = async (query) => {
-    if (!query.trim() || isLoading) return
+    if (!query.trim() || isLoading || isRestoring) return
 
     const userMessage = { id: `user-${Date.now()}`, role: 'user', content: query }
     const assistantId = `assistant-${Date.now()}`
-    const history = messages.map((msg) => ({ role: msg.role, content: msg.content }))
 
     setMessages((prev) => [
       ...prev,
@@ -55,7 +129,7 @@ function App() {
       const response = await fetch('/api/chat/stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, history }),
+        body: JSON.stringify({ session_id: sessionId, query }),
       })
 
       if (!response.ok) {
@@ -182,12 +256,46 @@ function App() {
     }
   }
 
+  const startNewSession = () => {
+    if (isLoading || isRestoring) return
+
+    const nextSessionId = createSessionId()
+    setMessages([])
+    setLoadingMeta(null)
+    setSessionId(nextSessionId)
+
+    try {
+      window.localStorage.setItem(SESSION_STORAGE_KEY, nextSessionId)
+    } catch (_) {
+      // Ignore storage errors and keep in-memory session rotation.
+    }
+  }
+
+  const clearSessionContext = () => {
+    if (isLoading || isRestoring) return
+
+    const nextSessionId = createSessionId()
+    setMessages([])
+    setLoadingMeta(null)
+    setSessionId(nextSessionId)
+
+    try {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY)
+    } catch (_) {
+      // Ignore storage errors and let the next request recreate a session id.
+    }
+  }
+
   return (
     <ChatContainer
       messages={messages}
       isLoading={isLoading}
+      isRestoring={isRestoring}
       loadingMeta={loadingMeta}
       stageOrder={STAGE_ORDER}
+      sessionId={sessionId}
+      onNewSession={startNewSession}
+      onClearSession={clearSessionContext}
       onSend={sendMessage}
     />
   )

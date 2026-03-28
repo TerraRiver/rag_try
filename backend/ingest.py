@@ -20,13 +20,13 @@ import os
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
+from env_loader import load_project_env
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
 from langchain_openai import OpenAIEmbeddings
 
-load_dotenv()
+load_project_env()
 
 # ──────────────────────────────────────────────
 # 配置
