@@ -31,7 +31,7 @@ _llm = ChatOpenAI(
     model=os.getenv("LLM_MODEL", "Qwen/Qwen2.5-7B-Instruct"),
     api_key=os.getenv("SILICONFLOW_API_KEY"),
     base_url=os.getenv("SILICONFLOW_BASE_URL", "https://api.siliconflow.cn/v1"),
-    temperature=0.7,
+    temperature=float(os.getenv("LLM_TEMPERATURE", "0.2")),
 )
 
 _embeddings = OpenAIEmbeddings(
@@ -44,8 +44,13 @@ _embeddings = OpenAIEmbeddings(
 # 向量库（在 FastAPI 启动时加载）
 # ──────────────────────────────────────────────
 _vectorstore = None
-_retriever = None
+_candidate_retriever = None
+_reranker = None
 ProgressCallback = Optional[Callable[[str, str], None]]
+TokenCallback = Optional[Callable[[str], None]]
+MAX_HISTORY_MESSAGES = 4
+MAX_HISTORY_CHARS_PER_MESSAGE = 400
+MAX_SEARCH_QUERY_CHARS = 200
 
 
 # ──────────────────────────────────────────────
@@ -96,7 +101,7 @@ class SiliconFlowReranker(BaseDocumentCompressor):
 
 def load_vectorstore():
     """加载本地 ChromaDB，构建混合检索器（BM25 + 向量 + Reranker），在 FastAPI lifespan 中调用。"""
-    global _vectorstore, _retriever
+    global _vectorstore, _candidate_retriever, _reranker
     chroma_path = os.getenv("CHROMA_DB_PATH", "./chroma_db")
     _vectorstore = Chroma(
         persist_directory=chroma_path,
@@ -148,8 +153,12 @@ def load_vectorstore():
         top_n=int(os.getenv("RERANKER_TOP_N", "10")),
     )
 
-    _retriever = ContextualCompressionRetriever(
-        base_compressor=reranker,
+    _candidate_retriever = ensemble
+    _reranker = reranker
+
+    # Warm up the retriever path once at startup so later requests don't do it lazily.
+    ContextualCompressionRetriever(
+        base_compressor=_reranker,
         base_retriever=ensemble,
     )
 
@@ -158,15 +167,23 @@ def load_vectorstore():
 # Prompt 模板
 # ──────────────────────────────────────────────
 _PROMPT_TEMPLATE = """\
-你是一个专业的领导人讲话研究助手。请根据「已知资料」回答用户的问题。
-如果已知资料中没有相关内容，请如实说明，不要编造。
+你是一个专业的领导人讲话研究助手。请依据「已知资料」回答用户问题。
+
+回答规则（必须严格遵守）：
+1. 事实依据只能来自已知资料，禁止使用外部常识或编造信息。
+2. 对话历史仅用于理解用户本轮提问中的代词和省略指代，不得作为事实证据。
+3. 每一个自然段末尾都必须追加引用标注，格式为 [资料n]，可多个并列，如 [资料1][资料3]。
+4. 引用编号 n 必须来自下方已知资料中的编号，且与该段内容对应。
+5. 若资料不足以回答，直接回答“未在资料中找到明确依据。”并给出最相关的 [资料n]。
+
+对话历史（仅用于指代理解）：
+{history_text}
 
 已知资料：
 {context}
-{history_text}
-用户问题：{question}
 
-请用中文详细回答："""
+用户问题：{question}
+"""
 
 _prompt = ChatPromptTemplate.from_template(_PROMPT_TEMPLATE)
 
@@ -187,10 +204,22 @@ def _format_history(history: list) -> str:
     if not history:
         return ""
     lines = []
-    for msg in history[-6:]:   # 最多保留最近 3 轮（6 条）
+    for msg in history[-MAX_HISTORY_MESSAGES:]:
         role = "用户" if msg.get("role") == "user" else "助手"
-        lines.append(f"{role}：{msg.get('content', '')}")
+        content = " ".join(str(msg.get("content", "")).split())
+        if len(content) > MAX_HISTORY_CHARS_PER_MESSAGE:
+            content = content[:MAX_HISTORY_CHARS_PER_MESSAGE] + "…"
+        lines.append(f"{role}：{content}")
     return "\n对话历史：\n" + "\n".join(lines) + "\n"
+
+
+def _normalize_search_query(text: str, fallback: str) -> str:
+    query = " ".join((text or "").split())
+    if not query:
+        query = fallback.strip()
+    if len(query) > MAX_SEARCH_QUERY_CHARS:
+        query = query[:MAX_SEARCH_QUERY_CHARS].rstrip() + "…"
+    return query or fallback.strip()
 
 
 def _format_source_node(doc) -> str:
@@ -236,9 +265,27 @@ def _rewrite_query(question: str, history: list) -> str:
     history_text = _format_history(history)
     chain = _rewrite_prompt | _llm | StrOutputParser()
     try:
-        return chain.invoke({"history": history_text, "question": question}).strip()
+        rewritten = chain.invoke({"history": history_text, "question": question}).strip()
+        return _normalize_search_query(rewritten, question)
     except Exception:
-        return question  # 降级：出错时直接用原问题
+        return _normalize_search_query(question, question)
+
+
+def _retrieve_documents(
+    search_query: str,
+    report: Callable[[str, str], None],
+) -> list[Document]:
+    if _candidate_retriever is None or _reranker is None:
+        raise RuntimeError(
+            "向量库未加载。请先运行 ingest.py 建立知识库，然后重启后端。"
+        )
+
+    report("retrieve", "召回候选资料")
+    candidates = _candidate_retriever.invoke(search_query)
+
+    report("retrieve", "精排检索结果")
+    reranked = _reranker.compress_documents(candidates, search_query)
+    return list(reranked)
 
 
 def query_rag(
@@ -250,7 +297,7 @@ def query_rag(
     执行 RAG 查询。
     返回 {"answer": str, "source_nodes": list[str]}
     """
-    if _retriever is None:
+    if _candidate_retriever is None or _reranker is None:
         raise RuntimeError(
             "向量库未加载。请先运行 ingest.py 建立知识库，然后重启后端。"
         )
@@ -260,10 +307,10 @@ def query_rag(
             progress_callback(stage, label)
 
     report("rewrite", "理解问题")
-    search_query = _rewrite_query(question, history or [])
+    clean_question = question.strip()
+    search_query = _rewrite_query(clean_question, history or [])
 
-    report("retrieve", "检索资料")
-    docs = _retriever.invoke(search_query)
+    docs = _retrieve_documents(search_query, report)
 
     report("generate", "生成答案")
     chain = (
@@ -277,9 +324,76 @@ def query_rag(
         | StrOutputParser()
     )
 
-    answer = chain.invoke(question)
+    answer = chain.invoke(clean_question)
 
     report("sources", "整理来源")
     source_nodes = [_format_source_node(doc) for doc in docs]
 
+    return {"answer": answer, "source_nodes": source_nodes}
+
+
+def _extract_chunk_text(chunk) -> str:
+    """Normalize streamed model chunks into plain text."""
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+                continue
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+        return "".join(parts)
+    return str(content) if content else ""
+
+
+def query_rag_stream(
+    question: str,
+    history: list = None,
+    progress_callback: ProgressCallback = None,
+    token_callback: TokenCallback = None,
+) -> dict:
+    """
+    Execute a RAG query with token-level streaming callback.
+    Returns {"answer": str, "source_nodes": list[str]} after streaming ends.
+    """
+    if _candidate_retriever is None or _reranker is None:
+        raise RuntimeError(
+            "向量库未加载。请先运行 ingest.py 建立知识库，然后重启后端。"
+        )
+
+    def report(stage: str, label: str) -> None:
+        if progress_callback:
+            progress_callback(stage, label)
+
+    report("rewrite", "理解问题")
+    clean_question = question.strip()
+    search_query = _rewrite_query(clean_question, history or [])
+
+    docs = _retrieve_documents(search_query, report)
+
+    prompt_value = _prompt.invoke(
+        {
+            "history_text": _format_history(history or []),
+            "context": _format_docs(docs),
+            "question": clean_question,
+        }
+    )
+
+    report("generate", "生成答案")
+    answer_parts: list[str] = []
+    for chunk in _llm.stream(prompt_value):
+        token = _extract_chunk_text(chunk)
+        if not token:
+            continue
+        answer_parts.append(token)
+        if token_callback:
+            token_callback(token)
+
+    answer = "".join(answer_parts)
+
+    report("sources", "整理来源")
+    source_nodes = [_format_source_node(doc) for doc in docs]
     return {"answer": answer, "source_nodes": source_nodes}

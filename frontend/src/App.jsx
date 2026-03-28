@@ -14,13 +14,35 @@ function App() {
   const [isLoading, setIsLoading] = useState(false)
   const [loadingMeta, setLoadingMeta] = useState(null)
 
+  const updateAssistantMessage = (assistantId, updater, fallbackMessage = null) => {
+    setMessages((prev) =>
+      {
+        let matched = false
+        const next = prev.map((message) => {
+          if (message.id !== assistantId) return message
+          matched = true
+          return updater(message)
+        })
+        if (!matched && fallbackMessage) {
+          next.push(fallbackMessage)
+        }
+        return next
+      }
+    )
+  }
+
   const sendMessage = async (query) => {
     if (!query.trim() || isLoading) return
 
-    const userMessage = { role: 'user', content: query }
+    const userMessage = { id: `user-${Date.now()}`, role: 'user', content: query }
+    const assistantId = `assistant-${Date.now()}`
     const history = messages.map((msg) => ({ role: msg.role, content: msg.content }))
 
-    setMessages((prev) => [...prev, userMessage])
+    setMessages((prev) => [
+      ...prev,
+      userMessage,
+      { id: assistantId, role: 'assistant', content: '', sources: [], isStreaming: true },
+    ])
     setIsLoading(true)
     setLoadingMeta({
       startedAt: Date.now(),
@@ -55,7 +77,6 @@ function App() {
         if (event.type === 'stage') {
           setLoadingMeta((prev) => {
             if (!prev) return prev
-
             const stageExists = prev.stages.some((stage) => stage.key === event.stage)
             const nextStages = stageExists
               ? prev.stages.map((stage) =>
@@ -78,6 +99,16 @@ function App() {
               stages: nextStages,
             }
           })
+          return
+        }
+
+        if (event.type === 'delta') {
+          const token = event.delta || ''
+          if (!token) return
+          updateAssistantMessage(assistantId, (message) => ({
+            ...message,
+            content: (message.content || '') + token,
+          }))
           return
         }
 
@@ -130,23 +161,21 @@ function App() {
         throw new Error('响应提前结束，未收到最终结果')
       }
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: finalPayload.answer,
-          sources: finalPayload.source_nodes,
-        },
-      ])
+      updateAssistantMessage(assistantId, (message) => ({
+        ...message,
+        content: finalPayload.answer || message.content,
+        sources: finalPayload.source_nodes,
+        isStreaming: false,
+      }))
     } catch (error) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: `请求失败：${error.message}`,
-          sources: [],
-        },
-      ])
+      const errorMessage = {
+        id: assistantId,
+        role: 'assistant',
+        content: `请求失败：${error.message}`,
+        sources: [],
+        isStreaming: false,
+      }
+      updateAssistantMessage(assistantId, () => errorMessage, errorMessage)
     } finally {
       setIsLoading(false)
       setLoadingMeta(null)
@@ -158,6 +187,7 @@ function App() {
       messages={messages}
       isLoading={isLoading}
       loadingMeta={loadingMeta}
+      stageOrder={STAGE_ORDER}
       onSend={sendMessage}
     />
   )

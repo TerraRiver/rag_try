@@ -1,13 +1,24 @@
-# 知识库文档目录
+# 知识库数据目录
 
-将你的知识库文档放在这个目录下，支持以下格式：
-- `.txt` — 纯文本
-- `.md` — Markdown
-- `.pdf` — PDF 文件
+当前项目的 `ingest.py` 只读取这个目录下的 CSV 文件：
 
-然后在 `backend/` 目录下运行：
+- `contentALL1-12298.csv`
+
+CSV 预期字段为：
+
+- `原序号`
+- `标题`
+- `来源`
+- `时间`
+- `内容`
+- `原文刊登`
+- `链接`
+- `类型`
+
+在 `backend/` 目录下运行：
+
 ```bash
-python ingest.py
+uv run python ingest.py
 ```
 
-脚本会自动完成文本分块、向量化并存储到本地 ChromaDB。
+脚本会读取上述 CSV，完成文本分块、向量化，并将结果写入本地 ChromaDB。

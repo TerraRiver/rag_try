@@ -31,31 +31,39 @@ export default function ChatInput({ onSend, isLoading }) {
   }
 
   return (
-    <div className="bg-white border-t px-4 py-3 flex-shrink-0">
-      <div className="max-w-3xl mx-auto flex items-end gap-2">
-        {/* 输入框 */}
-        <div className="flex-1">
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={handleInput}
-            onKeyDown={handleKeyDown}
-            placeholder="输入问题，按 Enter 发送（Shift+Enter 换行）"
-            disabled={isLoading}
-            rows={1}
-            className="w-full resize-none rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 disabled:bg-gray-50 disabled:text-gray-400 transition"
-            style={{ minHeight: '44px', maxHeight: '120px' }}
-          />
-        </div>
+    <div className="border-t border-[color:var(--line)] bg-[color:var(--panel)] px-4 py-4 md:px-8 md:py-6">
+      <div className="mx-auto max-w-4xl">
+        <div className="rounded-[24px] border border-[color:var(--line)] bg-[color:var(--surface)] p-3 shadow-[0_10px_32px_rgba(15,23,42,0.05)]">
+          <div className="flex flex-col gap-3 md:flex-row md:items-end">
+            <div className="flex-1">
+              <div className="mb-2 flex items-center justify-between gap-3 px-1">
+                <span className="section-label">输入问题</span>
+                <span className="text-[11px] uppercase tracking-[0.26em] text-[color:var(--muted)]">
+                  {isLoading ? 'Generating' : 'Ready'}
+                </span>
+              </div>
+              <textarea
+                ref={textareaRef}
+                value={value}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                placeholder="输入你的问题"
+                disabled={isLoading}
+                rows={1}
+                className="w-full resize-none rounded-[18px] border border-[color:var(--line)] bg-white px-4 py-3 text-[15px] leading-7 text-[color:var(--ink)] outline-none transition placeholder:text-[color:var(--muted)] focus:border-[color:var(--accent)] focus:ring-4 focus:ring-[color:var(--accent-soft)] disabled:cursor-not-allowed disabled:bg-[color:var(--surface-soft)]"
+                style={{ minHeight: '96px', maxHeight: '180px' }}
+              />
+            </div>
 
-        {/* 发送按钮 */}
-        <button
-          onClick={handleSend}
-          disabled={!value.trim() || isLoading}
-          className="h-11 px-5 bg-blue-500 text-white rounded-xl text-sm font-medium hover:bg-blue-600 active:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition flex-shrink-0"
-        >
-          发送
-        </button>
+            <button
+              onClick={handleSend}
+              disabled={!value.trim() || isLoading}
+              className="flex h-12 min-w-[124px] items-center justify-center rounded-[16px] border border-[color:var(--accent)] bg-[color:var(--accent)] px-5 text-sm font-semibold text-white transition hover:bg-[color:var(--accent-strong)] disabled:cursor-not-allowed disabled:border-[color:var(--line)] disabled:bg-[color:var(--surface-soft)] disabled:text-[color:var(--muted)]"
+            >
+              {isLoading ? '处理中...' : '发送问题'}
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   )

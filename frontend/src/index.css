@@ -2,17 +2,127 @@
 @tailwind components;
 @tailwind utilities;
 
-/* 极简滚动条 */
-::-webkit-scrollbar {
-  width: 4px;
+@layer base {
+  :root {
+    --bg: #f4f7fb;
+    --bg-deep: #eef2f7;
+    --panel: rgba(255, 255, 255, 0.88);
+    --surface: #f8fafc;
+    --surface-soft: #f1f5f9;
+    --surface-dark: #0f172a;
+    --ink: #111827;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --accent: #2563eb;
+    --accent-strong: #1d4ed8;
+    --accent-soft: rgba(37, 99, 235, 0.12);
+    --accent-tint: #eff6ff;
+    --font-display: "Aptos", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif;
+    --font-body: "Aptos", "Segoe UI Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", sans-serif;
+  }
+
+  html {
+    height: 100%;
+    background: var(--bg);
+  }
+
+  body {
+    height: 100%;
+    margin: 0;
+    color: var(--ink);
+    font-family: var(--font-body);
+    background:
+      radial-gradient(circle at top left, rgba(37, 99, 235, 0.12), transparent 28%),
+      radial-gradient(circle at 85% 12%, rgba(14, 165, 233, 0.1), transparent 24%),
+      linear-gradient(180deg, var(--bg), var(--bg-deep));
+  }
+
+  #root {
+    height: 100%;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  button,
+  textarea {
+    font: inherit;
+  }
+
+  ::selection {
+    background: rgba(184, 92, 56, 0.24);
+    color: var(--ink);
+  }
 }
+
+@layer components {
+  .font-display {
+    font-family: var(--font-display);
+    letter-spacing: -0.03em;
+  }
+
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .rich-markdown {
+    color: var(--ink);
+  }
+
+  .rich-markdown :first-child {
+    margin-top: 0;
+  }
+
+  .rich-markdown :last-child {
+    margin-bottom: 0;
+  }
+
+  .source-summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .pulse-soft {
+    animation: pulse-soft 1.8s ease-in-out infinite;
+  }
+
+  .chat-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.48) transparent;
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.22);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(37, 99, 235, 0);
+  }
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+
 ::-webkit-scrollbar-track {
   background: transparent;
 }
+
 ::-webkit-scrollbar-thumb {
-  background: #e2e8f0;
-  border-radius: 2px;
+  background: rgba(100, 116, 139, 0.28);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: padding-box;
 }
+
 ::-webkit-scrollbar-thumb:hover {
-  background: #cbd5e1;
+  background: rgba(100, 116, 139, 0.42);
+  border: 3px solid transparent;
+  background-clip: padding-box;
 }

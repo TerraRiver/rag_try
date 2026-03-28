@@ -1,106 +1,54 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import MessageBubble from './MessageBubble'
 
-function formatElapsed(ms) {
-  const totalSeconds = Math.floor(ms / 1000)
-  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0')
-  const seconds = String(totalSeconds % 60).padStart(2, '0')
-  return `${minutes}:${seconds}`
-}
-
-function ThinkingStatus({ loadingMeta }) {
-  const [now, setNow] = useState(Date.now())
-
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000)
-    return () => clearInterval(timer)
-  }, [])
-
-  const elapsedText = useMemo(() => {
-    if (!loadingMeta?.startedAt) return '00:00'
-    return formatElapsed(Math.max(0, now - loadingMeta.startedAt))
-  }, [loadingMeta?.startedAt, now])
-
-  const stageOrder = loadingMeta?.stageOrder || []
-  const currentStage = loadingMeta?.currentStage
-  const currentIndex = stageOrder.findIndex((stage) => stage.key === currentStage)
-  const currentLabel =
-    stageOrder.find((stage) => stage.key === currentStage)?.label ||
-    loadingMeta?.stages?.find((stage) => stage.key === currentStage)?.label ||
-    '处理中'
-
-  return (
-    <div className="flex items-start gap-2">
-      <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-600 font-bold text-xs flex-shrink-0">
-        AI
-      </div>
-      <div className="bg-white rounded-2xl rounded-tl-sm px-4 py-3 shadow-sm border border-gray-100 min-w-[260px] max-w-[360px]">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <span className="text-gray-500 text-sm">思考中</span>
-            <span className="flex gap-1 items-center">
-              {[0, 150, 300].map((delay) => (
-                <span
-                  key={delay}
-                  className="w-1.5 h-1.5 bg-gray-300 rounded-full animate-bounce"
-                  style={{ animationDelay: `${delay}ms` }}
-                />
-              ))}
-            </span>
-          </div>
-          <span className="text-xs font-mono text-blue-500">{elapsedText}</span>
-        </div>
-
-        <p className="text-xs text-gray-500 mt-2">当前阶段：{currentLabel}</p>
-
-        <div className="mt-2 space-y-1.5">
-          {stageOrder.map((stage, index) => {
-            const isCurrent = index === currentIndex
-            const isDone = currentIndex > index
-            const statusClass = isDone
-              ? 'bg-emerald-500'
-              : isCurrent
-                ? 'bg-blue-500 animate-pulse'
-                : 'bg-gray-200'
-            const textClass = isCurrent ? 'text-gray-700' : isDone ? 'text-gray-600' : 'text-gray-400'
-
-            return (
-              <div key={stage.key} className="flex items-center gap-2">
-                <span
-                  className={`w-3.5 h-3.5 rounded-full flex items-center justify-center text-[10px] text-white ${statusClass}`}
-                >
-                  {isDone ? '✓' : ''}
-                </span>
-                <span className={`text-xs ${textClass}`}>{stage.label}</span>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-export default function MessageList({ messages, isLoading, loadingMeta }) {
+export default function MessageList({ messages, isLoading, onSend, starterPrompts = [] }) {
   const bottomRef = useRef(null)
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, isLoading, loadingMeta?.currentStage])
+    const lastMessage = messages[messages.length - 1]
+    if (!lastMessage) return
+
+    if (lastMessage.role === 'user' || lastMessage.isStreaming) {
+      bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    }
+  }, [messages])
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-6 space-y-5">
+    <div className="chat-scrollbar flex-1 min-h-0 overflow-y-auto px-4 py-6 md:px-8">
       {messages.length === 0 && !isLoading && (
-        <div className="flex items-center justify-center h-full">
-          <p className="text-gray-300 text-sm select-none">向我提问吧，我会从知识库中寻找答案</p>
+        <div className="mx-auto flex h-full w-full max-w-4xl items-center">
+          <div className="w-full rounded-[28px] border border-[color:var(--line)] bg-[color:var(--surface)] p-6 shadow-[0_12px_36px_rgba(15,23,42,0.05)] md:p-8">
+            <p className="section-label">开始提问</p>
+            <h3 className="mt-4 max-w-2xl text-3xl font-semibold leading-tight text-[color:var(--ink)] md:text-[2.5rem]">
+              从档案里提问题，
+              <br />
+              让答案带着出处回来。
+            </h3>
+
+            <div className="mt-8 grid gap-3 md:grid-cols-3">
+              {starterPrompts.map((prompt, index) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => onSend(prompt)}
+                  className="group rounded-[20px] border border-[color:var(--line)] bg-white p-4 text-left transition hover:-translate-y-0.5 hover:border-[color:var(--accent)] hover:shadow-[0_10px_24px_rgba(15,23,42,0.06)]"
+                >
+                  <span className="text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent)]">
+                    Prompt 0{index + 1}
+                  </span>
+                  <p className="mt-3 text-sm leading-7 text-[color:var(--ink)]">{prompt}</p>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
-      {messages.map((message, idx) => (
-        <MessageBubble key={idx} message={message} />
-      ))}
-
-      {isLoading && <ThinkingStatus loadingMeta={loadingMeta} />}
+      <div className="mx-auto flex w-full max-w-4xl flex-col gap-6">
+        {messages.map((message, idx) => (
+          <MessageBubble key={message.id || idx} message={message} />
+        ))}
+      </div>
       <div ref={bottomRef} />
     </div>
   )

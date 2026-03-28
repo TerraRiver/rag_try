@@ -2,51 +2,53 @@ import ReactMarkdown from 'react-markdown'
 
 export default function MessageBubble({ message }) {
   const isUser = message.role === 'user'
+  const isStreaming = !isUser && message.isStreaming
 
   return (
-    <div className={`flex items-start gap-2 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
-      {/* 头像 */}
+    <div className={`flex items-start gap-3 ${isUser ? 'flex-row-reverse' : 'flex-row'}`}>
       <div
-        className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
-          isUser ? 'bg-blue-500 text-white' : 'bg-blue-100 text-blue-600'
+        className={`flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
+          isUser
+            ? 'border-[color:var(--accent)] bg-[color:var(--accent)] text-white'
+            : 'border-[color:var(--line)] bg-[color:var(--surface-soft)] text-[color:var(--ink)]'
         }`}
       >
-        {isUser ? '我' : 'AI'}
+        {isUser ? '问' : '档'}
       </div>
 
-      {/* 内容区 */}
-      <div className={`max-w-[75%] flex flex-col gap-1 ${isUser ? 'items-end' : 'items-start'}`}>
-        {/* 气泡 */}
+      <div className={`flex max-w-[85%] flex-col gap-2 md:max-w-[78%] ${isUser ? 'items-end' : 'items-start'}`}>
         <div
-          className={`rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+          className={`overflow-hidden rounded-[22px] px-4 py-4 text-sm leading-7 shadow-[0_10px_28px_rgba(15,23,42,0.05)] md:px-5 ${
             isUser
-              ? 'bg-blue-500 text-white rounded-tr-sm'
-              : 'bg-white text-gray-800 rounded-tl-sm border border-gray-100'
+              ? 'rounded-tr-md border border-[color:var(--accent)] bg-[color:var(--accent)] text-white'
+              : 'rounded-tl-md border border-[color:var(--line)] bg-white text-[color:var(--ink)]'
           }`}
         >
           {isUser ? (
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
-            <div className="prose prose-sm max-w-none prose-p:my-1 prose-pre:my-2 prose-code:text-blue-600 prose-code:bg-blue-50 prose-code:px-1 prose-code:rounded">
+            <div className="rich-markdown prose prose-sm max-w-none text-[color:var(--ink)] prose-p:my-2 prose-headings:text-[color:var(--ink)] prose-strong:text-[color:var(--ink)] prose-li:text-[color:var(--ink)] prose-pre:my-3 prose-pre:rounded-2xl prose-pre:bg-[color:var(--surface-dark)] prose-pre:text-stone-100 prose-code:rounded prose-code:bg-[color:var(--surface-soft)] prose-code:px-1 prose-code:text-[color:var(--accent)]">
               <ReactMarkdown>{message.content}</ReactMarkdown>
+              {isStreaming && <span className="ml-1 inline-block h-4 w-1.5 animate-pulse rounded-full bg-[color:var(--accent)] align-[-2px]" />}
             </div>
           )}
         </div>
 
-        {/* 参考来源（折叠展示） */}
         {!isUser && message.sources && message.sources.length > 0 && (
-          <details open className="text-xs text-gray-400 w-full">
-            <summary className="cursor-pointer hover:text-gray-500 select-none py-0.5">
-              参考来源 ({message.sources.length} 条)
+          <details open className="w-full text-xs text-[color:var(--muted)]">
+            <summary className="source-summary flex cursor-pointer list-none items-center gap-2 py-1 text-[11px] uppercase tracking-[0.24em] text-[color:var(--accent)]">
+              参考来源
+              <span className="rounded-full border border-[color:var(--line)] bg-[color:var(--surface-soft)] px-2 py-0.5 text-[10px] tracking-[0.18em] text-[color:var(--muted)]">
+                {message.sources.length} 条
+              </span>
             </summary>
-            <div className="mt-1 space-y-1.5">
+            <div className="mt-3 space-y-2.5">
               {message.sources.map((src, i) => {
-                // 把后端返回的多行字符串按行渲染，链接行单独变成可点击的 <a>
                 const lines = src.split('\n')
                 return (
                   <div
                     key={i}
-                    className="bg-gray-50 border border-gray-100 rounded-lg px-3 py-2 text-gray-500 leading-relaxed"
+                    className="rounded-[18px] border border-[color:var(--line)] bg-[color:var(--surface)] px-4 py-3 text-[color:var(--muted)]"
                   >
                     {lines.map((line, j) => {
                       const urlMatch = line.match(/🔗\s*(https?:\/\/\S+)/)
@@ -57,14 +59,21 @@ export default function MessageBubble({ message }) {
                               href={urlMatch[1]}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-blue-400 hover:text-blue-600 hover:underline break-all"
+                              className="break-all text-[color:var(--accent)] transition hover:underline"
                             >
                               🔗 原文链接
                             </a>
                           </div>
                         )
                       }
-                      return <div key={j}>{line}</div>
+                      return (
+                        <div
+                          key={j}
+                          className={j === 0 ? 'font-medium text-[color:var(--ink)]' : 'mt-1 leading-6'}
+                        >
+                          {line}
+                        </div>
+                      )
                     })}
                   </div>
                 )

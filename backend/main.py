@@ -1,11 +1,12 @@
 """
 main.py - FastAPI entrypoint
 
-Run:
+Development:
     cd backend
-    uvicorn main:app --reload --port 8000
-or:
-    python main.py
+    uv run python main.py
+
+Production:
+    uv run uvicorn main:app --host 0.0.0.0 --port 8000 --workers 2
 """
 
 import asyncio
@@ -23,7 +24,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 load_dotenv()
 
@@ -50,27 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
-
-if DIST_DIR.exists():
-    app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
-
-    @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
-        return FileResponse(DIST_DIR / "index.html")
-else:
-    print(f"frontend dist not found: {DIST_DIR}")
-
-
 
 class ChatRequest(BaseModel):
     query: str
-    history: Optional[List[dict]] = []
+    history: Optional[List[dict]] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
     answer: str
-    source_nodes: List[str] = []
+    source_nodes: List[str] = Field(default_factory=list)
 
 
 @app.post("/api/chat", response_model=ChatResponse)
@@ -78,7 +67,7 @@ async def chat(request: ChatRequest):
     from rag import query_rag
 
     try:
-        result = query_rag(request.query, request.history)
+        result = query_rag(request.query, request.history or [])
         return ChatResponse(**result)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc))
@@ -88,7 +77,7 @@ async def chat(request: ChatRequest):
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
-    from rag import query_rag
+    from rag import query_rag_stream
 
     started_at = time.monotonic()
     event_queue: "queue.Queue[dict | None]" = queue.Queue()
@@ -107,10 +96,14 @@ async def chat_stream(request: ChatRequest):
             def on_progress(stage: str, label: str) -> None:
                 push_event({"type": "stage", "stage": stage, "label": label})
 
-            result = query_rag(
+            def on_token(token: str) -> None:
+                push_event({"type": "delta", "delta": token})
+
+            result = query_rag_stream(
                 request.query,
-                request.history,
+                request.history or [],
                 progress_callback=on_progress,
+                token_callback=on_token,
             )
             push_event(
                 {
@@ -158,14 +151,19 @@ async def health():
     return {"status": "ok"}
 
 
-DIST_DIR = Path(__file__).parent.parent / "frontend" / "dist"
-
+DIST_DIR = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 if DIST_DIR.exists():
     app.mount("/assets", StaticFiles(directory=DIST_DIR / "assets"), name="assets")
+
+    @app.get("/")
+    async def serve_frontend_root():
+        return FileResponse(DIST_DIR / "index.html")
 
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         return FileResponse(DIST_DIR / "index.html")
+else:
+    print(f"frontend dist not found: {DIST_DIR}")
 
 
 if __name__ == "__main__":
