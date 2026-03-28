@@ -7,7 +7,7 @@ function formatElapsed(ms) {
   return `${minutes}:${seconds}`
 }
 
-export default function ProgressPanel({ loadingMeta, isLoading, stageOrder = [] }) {
+export default function ProgressPanel({ loadingMeta, isLoading, stageOrder = [], compact = false }) {
   const [now, setNow] = useState(Date.now())
 
   useEffect(() => {
@@ -19,10 +19,38 @@ export default function ProgressPanel({ loadingMeta, isLoading, stageOrder = [] 
   const visibleStageOrder = loadingMeta?.stageOrder || stageOrder
   const currentStage = loadingMeta?.currentStage
   const currentIndex = visibleStageOrder.findIndex((stage) => stage.key === currentStage)
+  const activeIndex = isLoading ? Math.max(currentIndex, 0) : -1
+  const totalStages = visibleStageOrder.length || 1
+  const progressPercent = isLoading
+    ? Math.min(100, ((activeIndex + 0.65) / totalStages) * 100)
+    : 0
   const elapsedText = useMemo(() => {
     if (!loadingMeta?.startedAt || !isLoading) return '00:00'
     return formatElapsed(Math.max(0, now - loadingMeta.startedAt))
   }, [isLoading, loadingMeta?.startedAt, now])
+  const currentLabel = isLoading && currentIndex >= 0
+    ? visibleStageOrder[currentIndex]?.label || '处理中'
+    : '等待提问'
+
+  if (compact) {
+    return (
+      <div className="rounded-[18px] border border-[color:var(--line)] bg-[color:var(--surface)] px-4 py-2.5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
+        <div className="flex items-center justify-between gap-3">
+          <p className="min-w-0 truncate text-sm font-medium text-[color:var(--ink)]">{currentLabel}</p>
+          <span className="shrink-0 font-mono text-[11px] text-[color:var(--muted)]">
+            {elapsedText}
+          </span>
+        </div>
+
+        <div className="mt-2.5 h-1.5 overflow-hidden rounded-full bg-[color:var(--surface-soft)]">
+          <div
+            className="h-full rounded-full bg-[color:var(--accent)] transition-all duration-500"
+            style={{ width: `${progressPercent}%` }}
+          />
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex h-full flex-col rounded-[24px] border border-[color:var(--line)] bg-[color:var(--surface)] p-5 shadow-[0_10px_28px_rgba(15,23,42,0.05)]">
